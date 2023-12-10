@@ -1,3 +1,7 @@
+LR_models/
+prophet_models/
+train_splits/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
