@@ -1,6 +1,5 @@
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 import pandas as pd
 import numpy as np
@@ -14,6 +13,9 @@ from prophet.serialize import model_to_json
 from joblib import dump
 from tqdm import tqdm
 import logging
+import mlflow
+import mlflow.prophet
+import mlflow.sklearn
 
 # Set the logging level for cmdstanpy to a higher value (WARNING or higher)
 logging.getLogger('cmdstanpy').setLevel(logging.WARNING)
@@ -36,10 +38,11 @@ def custom_moving_average(row, lags):
     return subset['y'].mean()
 
 
-for file in tqdm(csv_files):
+with mlflow.start_run() as run:
+    for file in tqdm(csv_files):
+        series_number = re.search(r'\d+', file).group()
 
-    series_number = re.search(r'\d+', file).group()
-    try:
+        # try:
         df = pd.read_csv(file)
         if series_number in ['256', '439', '507']:
             df = df.drop(df.index[0])
@@ -62,30 +65,12 @@ for file in tqdm(csv_files):
 
         model = Prophet(seasonality_mode=series_type)
         model.fit(df)
+        mlflow.prophet.log_model(model, f'prophet_{series_number}')
 
-        with open(os.path.join(prophet_models_path, f'model_{str(series_number)}.json'), 'w') as fout:
-            fout.write(model_to_json(model))
+        # with open(os.path.join(prophet_models_path, f'model_{str(series_number)}.json'), 'w') as fout:
+        #     fout.write(model_to_json(model))
 
         forecast = model.predict(df)
-        # features = ["ds",
-        #             "trend",
-        #             "yhat_lower",
-        #             "yhat_upper",
-        #             "trend_lower",
-        #             "trend_upper",
-        #             "additive_terms",
-        #             "additive_terms_lower",
-        #             "additive_terms_upper",
-        #             "daily",
-        #             "daily_lower",
-        #             "daily_upper",
-        #             "weekly",
-        #             "weekly_lower",
-        #             "weekly_upper",
-        #             "multiplicative_terms",
-        #             "multiplicative_terms_lower",
-        #             "multiplicative_terms_upper"]
-
         features = [x for x in forecast.drop(columns=['yhat'])]
         features_df = forecast[features].copy(deep=True)
         features_df['year'] = features_df['ds'].dt.year
@@ -116,21 +101,46 @@ for file in tqdm(csv_files):
                                                             features_df['y'][lags:],
                                                             test_size=0.3, shuffle=False)
 
-        lr_model = RandomForestRegressor(n_estimators=25)
+        lr_model = RandomForestRegressor(n_estimators=10, random_state=42)
+        # lr_model = LinearRegression()
         lr_model.fit(X_train, y_train)
 
-        dump(lr_model, os.path.join(lr_models_path, f'model_{str(series_number)}.joblib'), compress=7)
+        # dump(lr_model, os.path.join(lr_models_path, f'model_{str(series_number)}.joblib'))
+        mlflow.sklearn.log_model(lr_model, f'model_{series_number}')
         preds = lr_model.predict(X_test)
         mse = mean_squared_error(y_test, preds)
         print(f"\nMSE: {mse}")
-
-        model_metadata = [series_number, lags, series_type, mse, time_diff]
+        mlflow.log_metric(key=f'MSE_{series_number}', value=mse)
+        model_metadata = {"series_number": series_number, "lags": int(lags),
+                          "type": series_type, "mse": float(mse), "time_diff": time_diff}
+        model_metadata_list = [series_number, lags, series_type, mse, time_diff]
+        mlflow.log_dict(model_metadata, f'metadata_{series_number}')
 
         # Directly assign a new row to the DataFrame
-        metadata_df.loc[len(metadata_df)] = model_metadata
-    except Exception as e:
-        error_list.append(series_number)
-        print(e)
+        metadata_df.loc[len(metadata_df)] = model_metadata_list
+
+    # except Exception as e:
+    #     print(e)
+    #     error_list.append(series_number)
 
 metadata_df.to_csv("metadata.csv", index=False)
 print(error_list)
+
+# features = ["ds",
+#             "trend",
+#             "yhat_lower",
+#             "yhat_upper",
+#             "trend_lower",
+#             "trend_upper",
+#             "additive_terms",
+#             "additive_terms_lower",
+#             "additive_terms_upper",
+#             "daily",
+#             "daily_lower",
+#             "daily_upper",
+#             "weekly",
+#             "weekly_lower",
+#             "weekly_upper",
+#             "multiplicative_terms",
+#             "multiplicative_terms_lower",
+#             "multiplicative_terms_upper"]

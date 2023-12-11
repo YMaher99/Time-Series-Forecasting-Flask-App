@@ -7,4 +7,7 @@ RUN mkdir /code
 WORKDIR /code
 COPY requirements.txt .
 RUN pip install -r requirements.txt
-ADD . /code/
+ADD . /code
+RUN export MLFLOW_HOME=/code
+RUN export MLFLOW_TRACKING_URI=sqlite:///code/mlflow.sqlite
+
